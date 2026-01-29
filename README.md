@@ -1,1 +1,0 @@
-# Teachable-Machine-Image-Model
