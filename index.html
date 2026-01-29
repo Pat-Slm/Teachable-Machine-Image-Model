@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mask Detection</title>
+    <style>
+        body { font-family: sans-serif; text-align: center; padding: 20px; background-color: #f4f6f9; }
+        
+        /* กล่องกล้อง */
+        #webcam-container { 
+            margin: 20px auto; 
+            border: 5px solid #fff; 
+            border-radius: 15px; 
+            box-shadow: 0 5px 15px rgba(0,0,0,0.2); 
+            display: inline-block; 
+            overflow: hidden; 
+            min-width: 300px; 
+            min-height: 300px; 
+            background: #eee; 
+            position: relative;
+        }
+
+        /* ข้อความตอนปิดกล้อง */
+        #placeholder-text {
+            position: absolute;
+            top: 50%; left: 50%;
+            transform: translate(-50%, -50%);
+            color: #888;
+            font-weight: bold;
+        }
+        
+        canvas { border-radius: 10px; display: block; }
+        
+        /* ปุ่มกด (เปลี่ยนสีได้เมื่อกด) */
+        button { 
+            padding: 12px 24px; 
+            font-size: 18px; 
+            cursor: pointer; 
+            background-color: #007bff; 
+            color: white; 
+            border: none; 
+            border-radius: 50px; 
+            margin-bottom: 20px; 
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1); 
+            transition: 0.2s; 
+            min-width: 180px;
+        }
+        button:hover { transform: scale(1.05); }
+        
+        /* คลาสสำหรับปุ่มสีแดง (ตอนจะปิดกล้อง) */
+        button.stop-mode { background-color: #dc3545; }
+        button.stop-mode:hover { background-color: #c82333; }
+
+        /* หลอดพลัง */
+        .label-item { margin-bottom: 15px; width: 100%; max-width: 400px; margin-left: auto; margin-right: auto; }
+        .label-text { text-align: left; font-weight: bold; margin-bottom: 5px; color: #333; font-size: 16px; }
+        .progress-container { width: 100%; background-color: #e0e0e0; border-radius: 10px; overflow: hidden; height: 30px; }
+        .progress-bar { height: 100%; width: 0%; text-align: center; line-height: 30px; color: white; transition: width 0.2s ease-in-out, background-color 0.3s; font-size: 14px; font-weight: bold; }
+    </style>
+</head>
+<body>
+
+    <h1>Teachable Machine Image Model</h1>
+    
+    <button type="button" id="toggleBtn" onclick="toggleCamera()">📷 Start Camera</button>
+    
+    <div>
+        <div id="webcam-container">
+            <div id="placeholder-text">Camera is OFF</div>
+        </div>
+    </div>
+    
+    <div id="label-container"></div>
+
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@latest/dist/tf.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/image@latest/dist/teachablemachine-image.min.js"></script>
+    
+    <script type="text/javascript">
+        const URL = "https://teachablemachine.withgoogle.com/models/rDknM_zKV/"; 
+
+        let model, webcam, labelContainer, maxPredictions;
+        let isCameraRunning = false; // ตัวแปรเช็คสถานะ
+        let requestAnimationId = null; // ตัวแปรเก็บ loop เพื่อสั่งหยุด
+
+        // ฟังก์ชันหลัก: สลับการทำงาน เปิด/ปิด
+        async function toggleCamera() {
+            const btn = document.getElementById("toggleBtn");
+
+            if (!isCameraRunning) {
+                // --- กรณีจะเปิดกล้อง ---
+                btn.disabled = true; // ล็อกปุ่มกันกดรัว
+                btn.innerText = "⏳ Loading...";
+                await startCamera();
+                
+                // อัปเดตปุ่มเป็นสีแดง (Stop)
+                btn.disabled = false;
+                btn.innerText = "🛑 Stop Camera";
+                btn.classList.add("stop-mode");
+            } else {
+                // --- กรณีจะปิดกล้อง ---
+                await stopCamera();
+                
+                // อัปเดตปุ่มเป็นสีฟ้า (Start)
+                btn.innerText = "📷 Start Camera";
+                btn.classList.remove("stop-mode");
+            }
+        }
+
+        async function startCamera() {
+            try {
+                const modelURL = URL + "model.json";
+                const metadataURL = URL + "metadata.json";
+
+                // 1. โหลดโมเดล (ถ้ายังไม่เคยโหลด)
+                if (!model) {
+                    model = await tmImage.load(modelURL, metadataURL);
+                    maxPredictions = model.getTotalClasses();
+                }
+
+                // 2. ตั้งค่ากล้อง
+                const flip = true; 
+                webcam = new tmImage.Webcam(300, 300, flip); 
+                await webcam.setup(); 
+                await webcam.play();
+                
+                isCameraRunning = true;
+                window.requestAnimationFrame(loop);
+
+                // เคลียร์ข้อความเก่า และใส่ Canvas ลงไป
+                const webcamContainer = document.getElementById("webcam-container");
+                webcamContainer.innerHTML = ""; 
+                webcamContainer.appendChild(webcam.canvas);
+                
+                // 3. สร้างหลอดพลัง
+                createProgressBars();
+
+            } catch (error) {
+                alert("Error: " + error.message);
+                isCameraRunning = false;
+            }
+        }
+
+        async function stopCamera() {
+            isCameraRunning = false;
+            
+            // 1. หยุด Webcam
+            if (webcam) {
+                await webcam.stop();
+            }
+            
+            // 2. หยุด Loop
+            if (requestAnimationId) {
+                window.cancelAnimationFrame(requestAnimationId);
+            }
+
+            // 3. เคลียร์หน้าจอ
+            const webcamContainer = document.getElementById("webcam-container");
+            webcamContainer.innerHTML = '<div id="placeholder-text">Camera is OFF</div>';
+            
+            // 4. รีเซ็ตหลอดพลังเป็น 0
+            resetProgressBars();
+        }
+
+        async function loop() {
+            if (isCameraRunning) {
+                webcam.update(); 
+                await predict();
+                requestAnimationId = window.requestAnimationFrame(loop);
+            }
+        }
+
+        async function predict() {
+            const prediction = await model.predict(webcam.canvas);
+            
+            for (let i = 0; i < maxPredictions; i++) {
+                const className = prediction[i].className;
+                const probability = prediction[i].probability;
+                const percent = (probability * 100).toFixed(0) + "%";
+
+                const nameEl = document.getElementById(`name-${i}`);
+                const barEl = document.getElementById(`bar-${i}`);
+
+                if(nameEl && barEl) {
+                    nameEl.innerText = className;
+                    barEl.style.width = percent;
+                    barEl.innerText = percent;
+
+                    const lowerName = className.toLowerCase();
+                    if (lowerName.includes("mask") && !lowerName.includes("no")) {
+                        barEl.style.backgroundColor = "#28a745"; 
+                    } else {
+                        barEl.style.backgroundColor = "#dc3545"; 
+                    }
+                }
+            }
+        }
+
+        function createProgressBars() {
+            labelContainer = document.getElementById("label-container");
+            labelContainer.innerHTML = ""; 
+            for (let i = 0; i < maxPredictions; i++) { 
+                let div = document.createElement("div");
+                div.className = "label-item";
+                div.innerHTML = `
+                    <div class="label-text" id="name-${i}">Loading...</div>
+                    <div class="progress-container">
+                        <div class="progress-bar" id="bar-${i}" style="width: 0%">0%</div>
+                    </div>
+                `;
+                labelContainer.appendChild(div);
+            }
+        }
+
+        function resetProgressBars() {
+            const bars = document.getElementsByClassName("progress-bar");
+            for(let bar of bars) {
+                bar.style.width = "0%";
+                bar.innerText = "0%";
+            }
+        }
+    </script>
+</body>
+</html>
